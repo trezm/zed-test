@@ -9,7 +9,6 @@ pub struct PokemonFromApi {
     pub name: String,
     pub height: u32,
     pub weight: u32,
-    pub base_happiness: u32,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,7 +1,6 @@
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::env;
 use std::sync::Arc;
 use std::time::Instant;
 use thruster::context::hyper_request::HyperRequest;
@@ -19,17 +18,6 @@ use crate::storage::{Storage, StorageDestination, StorageError};
 
 // -- Util-ish stuff
 fn generate_context(request: HyperRequest, state: &Arc<RwLock<Storage>>, _path: &str) -> Ctx {
-    let ip = request
-        .request
-        .headers()
-        .get("CF-Connecting-IP")
-        .map(|v| v.to_str().unwrap_or("0.0.0.0").to_string())
-        .unwrap_or_else(|| {
-            request
-                .ip
-                .unwrap_or_else(|| std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)))
-                .to_string()
-        });
     Ctx::new(request, state.clone())
 }
 
@@ -70,13 +58,26 @@ async fn profiling(mut context: Ctx, next: MiddlewareNext<Ctx>) -> MiddlewareRes
     Ok(context)
 }
 
+#[middleware_fn]
+pub async fn log_storage(context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+    let mut default_context = Ctx::new(HyperRequest::default(), context.extra.clone());
+    // let hyper_request = context.hyper_request.unwrap().request;
+    let storage = context.extra.read().await;
+
+    info!("Storage: {:#?}", storage);
+
+    default_context.body("Check your logs, friend.");
+
+    Ok(default_context)
+}
+
 // -- Actual middleware
 #[derive(Serialize)]
 struct CreateBoxResponse {
     box_id: usize,
 }
 #[middleware_fn]
-pub async fn create_box(mut context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+pub async fn create_box(context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
     let mut default_context = Ctx::new(HyperRequest::default(), context.extra.clone());
     // let hyper_request = context.hyper_request.unwrap().request;
     let mut storage = context.extra.write().await;
@@ -95,7 +96,7 @@ struct GetBoxResponse<'a> {
     pokemon: Vec<&'a Pokemon>,
 }
 #[middleware_fn]
-pub async fn get_box(mut context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+pub async fn get_box(context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
     let mut default_context = Ctx::new(HyperRequest::default(), context.extra.clone());
     // let hyper_request = context.hyper_request.unwrap().request;
     let storage = context.extra.read().await;
@@ -121,7 +122,7 @@ pub async fn get_box(mut context: Ctx, _next: MiddlewareNext<Ctx>) -> Middleware
 }
 
 #[middleware_fn]
-pub async fn get_party(mut context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+pub async fn get_party(context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
     let mut default_context = Ctx::new(HyperRequest::default(), context.extra.clone());
     // let hyper_request = context.hyper_request.unwrap().request;
     let storage = context.extra.read().await;
@@ -147,11 +148,11 @@ struct MovePokemonResponse<'a> {
 }
 #[middleware_fn]
 pub async fn move_pokemon_to_box(
-    mut context: Ctx,
+    context: Ctx,
     _next: MiddlewareNext<Ctx>,
 ) -> MiddlewareResult<Ctx> {
     let mut default_context = Ctx::new(HyperRequest::default(), context.extra.clone());
-    let (content, mut context) = context.get_body().await.unwrap();
+    let (content, context) = context.get_body().await.unwrap();
     let mut storage = context.extra.write().await;
 
     let pokemon_id = map_try!(serde_json::from_str::<MovePokemonRequest>(&content), Err(_e) => {
@@ -187,10 +188,8 @@ pub async fn move_pokemon_to_box(
                 });
 
                 match storage.add_pokemon(pokemon, StorageDestination::Box(id)) {
-                    Ok(_) => {
-                        let body =
-                            serde_json::to_string(&MovePokemonResponse { pokemon: &pokemon })
-                                .unwrap();
+                    Ok(pokemon) => {
+                        let body = serde_json::to_string(&MovePokemonResponse { pokemon }).unwrap();
 
                         default_context.body(&body);
                     }
@@ -216,11 +215,11 @@ pub async fn move_pokemon_to_box(
 
 #[middleware_fn]
 pub async fn move_pokemon_to_party(
-    mut context: Ctx,
+    context: Ctx,
     _next: MiddlewareNext<Ctx>,
 ) -> MiddlewareResult<Ctx> {
     let mut default_context = Ctx::new(HyperRequest::default(), context.extra.clone());
-    let (content, mut context) = context.get_body().await.unwrap();
+    let (content, context) = context.get_body().await.unwrap();
     let mut storage = context.extra.write().await;
 
     let pokemon_id = map_try!(serde_json::from_str::<MovePokemonRequest>(&content), Err(_e) => {
@@ -248,10 +247,8 @@ pub async fn move_pokemon_to_party(
                 });
 
                 match storage.add_pokemon(pokemon, StorageDestination::Party) {
-                    Ok(_) => {
-                        let body =
-                            serde_json::to_string(&MovePokemonResponse { pokemon: &pokemon })
-                                .unwrap();
+                    Ok(pokemon) => {
+                        let body = serde_json::to_string(&MovePokemonResponse { pokemon }).unwrap();
 
                         default_context.body(&body);
                     }
@@ -287,6 +284,15 @@ pub async fn create() -> App<HyperRequest, Ctx, Arc<RwLock<Storage>>> {
     app.post("/boxes", async_middleware!(Ctx, [create_box]));
     app.get("/boxes/:id", async_middleware!(Ctx, [get_box]));
     app.get("/parties", async_middleware!(Ctx, [get_party]));
+    app.post(
+        "/boxes/:id/pokemon",
+        async_middleware!(Ctx, [move_pokemon_to_box]),
+    );
+    app.post(
+        "/parties/pokemon",
+        async_middleware!(Ctx, [move_pokemon_to_party]),
+    );
+    app.get("/info", async_middleware!(Ctx, [log_storage]));
 
     app
 }
@@ -294,6 +300,7 @@ pub async fn create() -> App<HyperRequest, Ctx, Arc<RwLock<Storage>>> {
 #[cfg(not(test))]
 pub async fn init() {
     use dotenv::dotenv;
+    use std::env;
     use thruster::HyperServer;
     use thruster::ThrusterServer;
 

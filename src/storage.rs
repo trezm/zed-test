@@ -67,21 +67,20 @@ impl Storage {
         &mut self,
         pokemon: Pokemon,
         destination: StorageDestination,
-    ) -> Result<(), StorageError> {
+    ) -> Result<&Pokemon, StorageError> {
         match destination {
             StorageDestination::Party => {
                 let id = pokemon.id();
                 self.party.push(pokemon)?;
                 self.pokemon_locations.insert(id, ContainerLocation::Party);
-                Ok(())
+                Ok(self.party.get_pokemon_ref(id)?)
             }
             StorageDestination::Box(i) => match self.boxes.get_mut(i) {
                 Some(bx) => {
                     let id = pokemon.id();
                     bx.push(pokemon)?;
-                    self.pokemon_locations
-                        .insert(id, ContainerLocation::Box(self.boxes.len() - 1));
-                    Ok(())
+                    self.pokemon_locations.insert(id, ContainerLocation::Box(i));
+                    Ok(bx.get_pokemon_ref(id)?)
                 }
                 None => Err(StorageError::BoxDoesNotExist),
             },
@@ -114,7 +113,7 @@ impl Storage {
                     self.pokemon_locations
                         .insert(pokemon_id, ContainerLocation::Party);
 
-                    Ok(&pokemon)
+                    Ok(self.party.get_pokemon_ref(pokemon_id)?)
                 }
             }
             StorageDestination::Box(i) => match self.boxes.get_mut(i) {
@@ -133,12 +132,13 @@ impl Storage {
                             }
                         }?;
 
-                        self.party.push(pokemon)?;
+                        let bx = self.boxes.get_mut(i).unwrap();
+                        bx.push(pokemon)?;
 
                         self.pokemon_locations
-                            .insert(pokemon_id, ContainerLocation::Party);
+                            .insert(pokemon_id, ContainerLocation::Box(i));
 
-                        Ok(&pokemon)
+                        Ok(self.party.get_pokemon_ref(pokemon_id)?)
                     }
                 }
                 None => Err(StorageError::BoxDoesNotExist),
@@ -182,5 +182,9 @@ impl Container {
 
     pub fn get_pokemon(&self) -> Vec<&Pokemon> {
         self.pokemon.values().collect::<Vec<&Pokemon>>()
+    }
+
+    pub fn get_pokemon_ref(&self, id: u32) -> Result<&Pokemon, StorageError> {
+        self.pokemon.get(&id).ok_or(StorageError::PokemonNotFound)
     }
 }
